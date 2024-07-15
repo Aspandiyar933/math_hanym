@@ -1,34 +1,25 @@
-FROM python:3.11
+# Use the official Python image as the base image
+FROM python:3.9-slim
 
-# Install system dependencies
+# Install necessary dependencies
 RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    texlive \
-    texlive-latex-extra \
-    texlive-fonts-extra \
-    texlive-latex-recommended \
-    texlive-science \
-    tipa \
-    libcairo2-dev \
-    libpango1.0-dev \
+    build-essential \
+    manim \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
+# Create and change to the app directory
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
+# Copy the requirements.txt file and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the Flask app
-COPY app.py .
+# Copy the rest of the application code
+COPY . .
 
-# Create output directory
-RUN mkdir /app/output
-
-# Expose port
+# Expose the application port
 EXPOSE 5000
 
-# Run the Flask app
-CMD ["python", "main.py"]
+# Run the application
+CMD ["python", "subscriber.py"]

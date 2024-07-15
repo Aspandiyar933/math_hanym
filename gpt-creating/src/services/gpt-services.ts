@@ -1,13 +1,20 @@
+import { Queue } from "bullmq";
 import ICode from "../interfaces/code.interface";
 import Code from "../models/code.model";
 import { openai } from "../openai";
-import amqp from 'amqplib';
+//import amqp from 'amqplib';
+
+const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
+const REDIS_PORT = process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT) : 6379;
 
 export default class GptService {
     private systemPrompt: string;
-    private rabbitmqUrl: string;
-    private queueName: string;
+    private queue: Queue;
+
+    //private rabbitmqUrl: string;
+    //private queueName: string;
     
+
     constructor() {
         this.systemPrompt = `
         You are a professional teacher who explains math through visualization using Manim. 
@@ -22,8 +29,13 @@ export default class GptService {
         }
         If the user prompt is irrelevant, return an empty array of code.
         `;
-        this.rabbitmqUrl = process.env.RABBITMQ_URL || 'amqp://localhost';
-        this.queueName = process.env.RABBITMQ_QUEUE || 'manim_queue';
+        
+        this.queue = new Queue('manim-queue', {
+            connection: {
+                host: REDIS_HOST,
+                port: REDIS_PORT
+            }
+        });
     }
 
     async generateManimCode(userPrompt: string) {
@@ -60,6 +72,17 @@ export default class GptService {
             return [];
         }
     }
+
+    private async publishToQueue(code: ICode) {
+        try {
+            await this.queue.add('manim-job', code);
+            console.log("Job added to the queue", code);
+        } catch (error) {
+            console.error('Error adding job to the queue:', error);
+            throw error;
+        }
+    }
+
     /*
     private async sendToRabbitMQ(code: ICode) {
         try {
@@ -81,5 +104,4 @@ export default class GptService {
         }
     }
     */
-   
 }

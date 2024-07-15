@@ -6,13 +6,21 @@ import subprocess
 import uuid
 from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import ResourceExistsError
+from rq import Queue, Connection, Worker
+from redis import Redis
+import json
+import dotenv
 
+dotenv.load_dotenv()
 
-server = Flask(__name__)
+app = Flask(__name__)
 
+# Redis connection
+redis_conn = Redis(host='localhost', port=6379)
+
+# Azure Blob Storage setup
 connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
 container_name = 'manim-animations'
-
 blob_service_client = BlobServiceClient.from_connection_string(connection_string)
 
 try:
@@ -20,28 +28,27 @@ try:
 except ResourceExistsError:
     pass
 
-
-@server.route('/video-rendering', methods=['POST'])
-def run_manim():
-    manim_code = request.json.get('code')
-    if not manim_code:
-        return jsonify({"error":"No Manim code provided"}), 400
+# Function to process Manim code
+def process_manim_code(code):
+    if not code:
+        raise ValueError("No Manim code provided")
+    
     try:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_file:
-            temp_file.write(manim_code)
+            temp_file.write(code)
             temp_file_path = temp_file.name
 
-        output_dir = '/app/output/'
+        output_dir = tempfile.mkdtemp()
         command = f"manim -qm -o {output_dir} {temp_file_path}"
         result = subprocess.run(command, shell=True, capture_output=True, text=True)
 
         if result.returncode != 0:
-            return jsonify({"error": "Manim execution failed", "details": result.stderr}), 500
+            raise RuntimeError(f"Manim execution failed: {result.stderr}")
 
         video_file = next((f for f in os.listdir(output_dir) if f.endswith('.mp4')), None)
 
         if not video_file:
-            return jsonify({"error":"No output video found"}), 500
+            raise FileNotFoundError("No output video found")
         
         video_path = os.path.join(output_dir, video_file)
         blob_name = f"{uuid.uuid4()}.mp4"
@@ -55,14 +62,11 @@ def run_manim():
             expiry=datetime.utcnow() + timedelta(hours=1)
         )
 
-        return jsonify({
+        return {
             "message": "Manim code executed successfully",
             "output": result.stdout,
             "video_url": sas_url
-        })
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        }
 
     finally:
         # Clean up temporary files
@@ -70,7 +74,22 @@ def run_manim():
             os.unlink(temp_file_path)
         for file in os.listdir(output_dir):
             os.remove(os.path.join(output_dir, file))
+        os.rmdir(output_dir)
+
+# Worker function to handle jobs
+def handle_job(job):
+    code = job.args[0]
+    return process_manim_code(code['code'])
+
+@app.route('/')
+def index():
+    return "Subscriber is running and listening to the queue."
 
 if __name__ == '__main__':
-    server.run(host='0.0.0.0', port=5000)
-                     
+    with Connection(redis_conn):
+        queue = Queue('manim-queue', connection=redis_conn)
+        worker = Worker([queue], connection=redis_conn)
+        worker.push_exc_handler(handle_job)
+        worker.work()
+
+    app.run(host='0.0.0.0', port=5000)
